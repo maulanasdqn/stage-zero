@@ -4,3 +4,4 @@ stagezero.toml
 *.db-journal
 .wrangler/
 *.pdf
+docs/

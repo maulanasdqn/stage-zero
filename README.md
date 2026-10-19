@@ -25,7 +25,7 @@ stage-zero/
 └── stagezero-cli/     `stagezero` binary (clap)
 ```
 
-The core defines traits (`StartupDirectory`, `FounderSource`, `ContactFinder`, `ApplicationRepository`, `Mailer`, `Delay`). Infra implements them, and the CLI and API both wire them together through `stagezero_infra::container`. See [`docs/stagezero_prd.md`](docs/stagezero_prd.md) and [`docs/tad.md`](docs/tad.md) for the product and architecture documents.
+The core defines traits (`StartupDirectory`, `FounderSource`, `ContactFinder`, `ApplicationRepository`, `Mailer`, `Delay`). Infra implements them, and the CLI and API both wire them together through `stagezero_infra::container`.
 
 ## Quick start
 
@@ -133,7 +133,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Codebase rules from the TAD:
+Codebase rules:
 
 - **No comments** in `.rs` files. Names should explain intent.
 - **Every dependency goes through a trait** defined in `stagezero-core`. Use cases depend on those traits, never on concrete infra types.
