@@ -1,0 +1,89 @@
+[
+ {
+  "id": 1,
+  "name": "Ledgerly",
+  "slug": "ledgerly",
+  "website": "https://ledgerly.ai",
+  "team_size": 3,
+  "industry": "Fintech",
+  "subindustry": "Fintech -> Payments",
+  "industries": [
+   "Fintech"
+  ],
+  "tags": [
+   "Payments",
+   "AI"
+  ],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": "Accounting on autopilot"
+ },
+ {
+  "id": 2,
+  "name": "ShipFast",
+  "slug": "shipfast",
+  "website": "https://shipfast.dev",
+  "team_size": 8,
+  "industry": "B2B",
+  "subindustry": "B2B -> Engineering, Product and Design",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [
+   "SaaS",
+   "Developer Tools"
+  ],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": "CI that never waits"
+ },
+ {
+  "id": 3,
+  "name": "BigCo",
+  "slug": "bigco",
+  "website": "https://bigco.com",
+  "team_size": 45,
+  "industry": "B2B",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [
+   "SaaS"
+  ],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": "Too big"
+ },
+ {
+  "id": 4,
+  "name": "Gone",
+  "slug": "gone",
+  "website": "https://gone.io",
+  "team_size": 2,
+  "industry": "B2B",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [
+   "SaaS"
+  ],
+  "batch": "Winter 2024",
+  "status": "Inactive",
+  "one_liner": "Shut down"
+ },
+ {
+  "id": 5,
+  "name": "Unknown Size",
+  "slug": "unknown",
+  "website": "https://unknown.io",
+  "team_size": null,
+  "industry": "B2B",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": ""
+ }
+]

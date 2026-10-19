@@ -1,0 +1,18 @@
+[package]
+name = "stagezero-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stagezero"
+path = "src/main.rs"
+
+[dependencies]
+stagezero-core.workspace = true
+stagezero-infra.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

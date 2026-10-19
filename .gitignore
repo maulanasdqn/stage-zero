@@ -1,0 +1,4 @@
+/target
+stagezero.toml
+*.db
+*.db-journal

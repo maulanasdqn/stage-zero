@@ -1,0 +1,32 @@
+[resend]
+from = "Your Name <you@yourdomain.com>"
+api_key = ""
+
+[applicant]
+name = "Your Name"
+email = "you@yourdomain.com"
+resume_path = "resume.pdf"
+portfolio = "https://yourdomain.com"
+
+[template]
+subject = "Founding engineer for {{company_name}}"
+body = """
+Hi {{founder_first_name}},
+
+I loved what {{company_name}} is building in {{industry}}: {{one_liner}}
+
+I'm {{applicant_name}}, a software engineer who enjoys shipping fast at day-one startups. I'd love to help {{company_name}} as a founding engineer. My resume is attached and more of my work is at {{portfolio}}.
+
+Would you be open to a quick chat this week?
+
+Best,
+{{applicant_name}}
+"""
+
+[storage]
+database_path = "stagezero.db"
+
+[outreach]
+min_delay_secs = 2
+max_delay_secs = 5
+daily_limit = 20

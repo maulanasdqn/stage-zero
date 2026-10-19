@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StageZero</title>
+  <style>
+    :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #ffffff; --accent: #ea580c; --ok: #16a34a; --warn: #ca8a04; --bad: #dc2626; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --line: #292524; --card: #1c1917; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 16px; }
+    h1 { margin: 0; font-size: 24px; }
+    h1 span { color: var(--accent); }
+    .sub { color: var(--muted); margin: 4px 0 24px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+    .tile b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+    .tile small { color: var(--muted); }
+    .flags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+    .flag { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 13px; color: var(--muted); }
+    .flag.on { color: var(--ok); border-color: var(--ok); }
+    .flag.off { color: var(--bad); border-color: var(--bad); }
+    .table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    tr:last-child td { border-bottom: 0; }
+    a { color: inherit; }
+    .status { font-size: 12px; font-weight: 600; }
+    .status.applied { color: var(--ok); }
+    .status.skipped { color: var(--warn); }
+    .status.failed-no-contact { color: var(--bad); }
+    .empty { padding: 32px; text-align: center; color: var(--muted); }
+    code { font-size: 13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Stage<span>Zero</span></h1>
+  <p class="sub">Outreach to day-one YC startups. Start a hunt with <code>POST /hunt</code> or the <code>stagezero hunt</code> CLI.</p>
+
+  <div class="tiles">
+    <div class="tile"><b>{{ summary.total }}</b><small>Tracked</small></div>
+    <div class="tile"><b>{{ summary.applied }}</b><small>Applied</small></div>
+    <div class="tile"><b>{{ summary.skipped }}</b><small>Skipped</small></div>
+    <div class="tile"><b>{{ summary.failed_no_contact }}</b><small>No contact</small></div>
+  </div>
+
+  <div class="flags">
+    {% if hunt_running %}<span class="flag on">Hunt running</span>{% else %}<span class="flag">Idle</span>{% endif %}
+    {% if mailer_configured %}<span class="flag on">Resend configured</span>{% else %}<span class="flag off">Resend key missing</span>{% endif %}
+    {% if resume_loaded %}<span class="flag on">Resume loaded</span>{% else %}<span class="flag off">Resume missing</span>{% endif %}
+  </div>
+
+  <div class="table-wrap">
+    {% if rows.is_empty() %}
+    <div class="empty">No applications tracked yet.</div>
+    {% else %}
+    <table>
+      <thead><tr><th>When</th><th>Status</th><th>Company</th><th>Website</th><th>Contact</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.applied_at }}</td>
+          <td><span class="status {{ row.status_class }}">{{ row.status }}</span></td>
+          <td><a href="{{ row.yc_url }}" target="_blank" rel="noopener">{{ row.company_name }}</a></td>
+          <td>{% if row.website.is_empty() %}-{% else %}<a href="{{ row.website }}" target="_blank" rel="noopener">{{ row.website }}</a>{% endif %}</td>
+          <td>{{ row.contact_email }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</main>
+</body>
+</html>
