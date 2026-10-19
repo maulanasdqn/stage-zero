@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "infra", "api", "cli"]
+members = ["stagezero-core", "stagezero-infra", "stagezero-api", "stagezero-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,8 +8,8 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-stagezero-core = { path = "core" }
-stagezero-infra = { path = "infra" }
+stagezero-core = { path = "stagezero-core" }
+stagezero-infra = { path = "stagezero-infra" }
 anyhow = "1"
 askama = "0.12"
 axum = "0.8"
