@@ -1,6 +1,8 @@
-[resend]
-from = "Your Name <you@yourdomain.com>"
-api_key = ""
+[email]
+provider = "cloudflare"
+from = "hello@yourdomain.com"
+from_name = "Your Name"
+cloudflare_account_id = ""
 
 [applicant]
 name = "Your Name"
@@ -8,19 +10,41 @@ email = "you@yourdomain.com"
 resume_path = "resume.pdf"
 portfolio = "https://yourdomain.com"
 
+max_highlights = 3
+
+[[applicant.highlights]]
+text = "Your strongest shipped result, with a number (throughput, revenue, users, time saved)."
+keywords = ["infrastructure", "developer tools", "data", "api"]
+
+[[applicant.highlights]]
+text = "A product you owned end to end in a specific domain."
+keywords = ["fintech", "finance", "payments"]
+
+[[applicant.highlights]]
+text = "An AI or automation project with a measurable outcome."
+keywords = ["ai", "llm", "agent", "automation"]
+
+[[applicant.highlights]]
+text = "Something that proves you can lead or grow a team or community."
+keywords = ["community", "consumer", "social"]
+pinned = false
+
 [template]
-subject = "Founding engineer for {{company_name}}"
+subject = "Founding engineer for {{company_name}}? (your stack, X yrs)"
 body = """
 Hi {{founder_first_name}},
 
-I loved what {{company_name}} is building in {{industry}}: {{one_liner}}
+Saw {{company_name}} in YC {{batch}}{{one_liner_clause}} and wanted to reach out directly. I'd love to be the engineer who helps you ship it fast.
 
-I'm {{applicant_name}}, a software engineer who enjoys shipping fast at day-one startups. I'd love to help {{company_name}} as a founding engineer. My resume is attached and more of my work is at {{portfolio}}.
+Why I think I can help {{company_name}} from day one:
 
-Would you be open to a quick chat this week?
+{{highlights}}
 
-Best,
-{{applicant_name}}
+Based in your city, open to remote or relocation. CV attached, more at {{portfolio}}.
+
+Worth a 15-minute call this week? If the timing is off, a quick "not now" helps too.
+
+{{applicant_first_name}}
 """
 
 [storage]

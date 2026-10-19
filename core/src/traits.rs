@@ -1,12 +1,14 @@
 use std::future::Future;
 
 use crate::entities::{
-    Application, ApplicationStatus, Contact, Founder, HuntCriteria, HuntEvent, NewApplication,
-    OutgoingEmail, Startup,
+    Application, ApplicationStatus, BatchInfo, Contact, Founder, HuntCriteria, HuntEvent,
+    NewApplication, OutgoingEmail, Startup,
 };
 use crate::errors::DomainError;
 
 pub trait StartupDirectory: Send + Sync {
+    fn batches(&self) -> impl Future<Output = Result<Vec<BatchInfo>, DomainError>> + Send;
+
     fn fetch(
         &self,
         criteria: &HuntCriteria,
@@ -29,6 +31,11 @@ pub trait ContactFinder: Send + Sync {
 }
 
 pub trait ApplicationRepository: Send + Sync {
+    fn find(
+        &self,
+        yc_slug: &str,
+    ) -> impl Future<Output = Result<Option<Application>, DomainError>> + Send;
+
     fn exists(&self, yc_slug: &str) -> impl Future<Output = Result<bool, DomainError>> + Send;
 
     fn record(

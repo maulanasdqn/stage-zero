@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use crate::entities::{
-    Applicant, Application, ApplicationStatus, Attachment, Contact, EmailPreview, EmailTemplate,
-    Founder, HuntCriteria, HuntEvent, HuntOutcome, HuntReport, NewApplication, OutgoingEmail,
-    Startup, StatusSummary, TemplateContext,
+    Applicant, Application, ApplicationStatus, Attachment, BatchInfo, Contact, DirectoryEntry,
+    EmailPreview, EmailTemplate, Founder, HuntCriteria, HuntEvent, HuntOutcome, HuntReport,
+    NewApplication, OutgoingEmail, Startup, StartupInsight, StatusSummary, TemplateContext,
 };
 use crate::errors::DomainError;
 use crate::traits::{
@@ -193,7 +195,8 @@ where
             });
         };
 
-        let email = self.compose_email(startup, &founders, &contact);
+        let email =
+            self.compose_email(startup, &founders, &contact.email, contact.founder.as_ref());
         let preview = EmailPreview::from(&email);
 
         if dry_run {
@@ -244,26 +247,186 @@ where
         &self,
         startup: &Startup,
         founders: &[Founder],
-        contact: &Contact,
+        recipient: &str,
+        contact_founder: Option<&Founder>,
     ) -> OutgoingEmail {
         let sole_founder = match founders {
             [only_founder] => Some(only_founder),
             _ => None,
         };
-        let greeted_founder = contact.founder.as_ref().or(sole_founder);
+        let greeted_founder = contact_founder.or(sole_founder);
         let context = TemplateContext {
             startup,
             founder: greeted_founder,
             applicant: &self.profile.applicant,
         };
         let (subject, body) = self.profile.template.render(&context);
-        OutgoingEmail {
-            to: contact.email.clone(),
-            reply_to: Some(self.profile.applicant.email.clone()),
+        self.outgoing(EmailPreview {
+            to: recipient.to_string(),
             subject,
             body,
+        })
+    }
+
+    fn outgoing(&self, preview: EmailPreview) -> OutgoingEmail {
+        OutgoingEmail {
+            to: preview.to,
+            reply_to: Some(self.profile.applicant.email.clone()),
+            subject: preview.subject,
+            body: preview.body,
             attachments: self.profile.resume.iter().cloned().collect(),
         }
+    }
+
+    pub async fn batches(&self) -> Result<Vec<BatchInfo>, DomainError> {
+        self.directory.batches().await
+    }
+
+    pub async fn explore(
+        &self,
+        criteria: &HuntCriteria,
+    ) -> Result<Vec<DirectoryEntry>, DomainError> {
+        if criteria.batch.trim().is_empty() {
+            return Err(DomainError::InvalidInput("batch must not be empty".into()));
+        }
+        let startups = self.directory.fetch(criteria).await?;
+        let statuses = self
+            .repository
+            .list(None)
+            .await?
+            .into_iter()
+            .map(|application| (application.yc_slug, application.status))
+            .collect::<HashMap<_, _>>();
+        Ok(startups
+            .into_iter()
+            .map(|startup| DirectoryEntry {
+                status: statuses.get(&startup.slug).copied(),
+                startup,
+            })
+            .collect())
+    }
+
+    pub async fn inspect(&self, startup: &Startup) -> Result<StartupInsight, DomainError> {
+        let founders = self
+            .founder_source
+            .founders(startup)
+            .await
+            .unwrap_or_default();
+        let has_website = startup
+            .website
+            .as_deref()
+            .is_some_and(|website| !website.trim().is_empty());
+        let contact = match has_website {
+            true => self
+                .contact_finder
+                .find(startup, &founders)
+                .await
+                .ok()
+                .flatten(),
+            false => None,
+        };
+        let recipient = contact
+            .as_ref()
+            .map(|contact| contact.email.as_str())
+            .unwrap_or_default();
+        let contact_founder = contact
+            .as_ref()
+            .and_then(|contact| contact.founder.as_ref());
+        let email =
+            EmailPreview::from(&self.compose_email(startup, &founders, recipient, contact_founder));
+        let status = self
+            .repository
+            .find(&startup.slug)
+            .await?
+            .map(|application| application.status);
+        Ok(StartupInsight {
+            highlights: self.profile.applicant.highlights_for(startup),
+            startup: startup.clone(),
+            founders,
+            contact,
+            email,
+            status,
+        })
+    }
+
+    pub async fn send_reviewed(
+        &self,
+        startup: &Startup,
+        email: EmailPreview,
+    ) -> Result<HuntOutcome, DomainError> {
+        let recipient = email.to.trim().to_string();
+        if !is_email_address(&recipient) {
+            return Err(DomainError::InvalidInput(format!(
+                "`{recipient}` is not a valid recipient address"
+            )));
+        }
+        if email.subject.trim().is_empty() || email.body.trim().is_empty() {
+            return Err(DomainError::InvalidInput(
+                "subject and body must not be empty".into(),
+            ));
+        }
+        if self.profile.resume.is_none() {
+            return Err(DomainError::InvalidInput(
+                "a resume attachment is required to send".into(),
+            ));
+        }
+        let already_applied = self
+            .repository
+            .find(&startup.slug)
+            .await?
+            .is_some_and(|application| application.status == ApplicationStatus::Applied);
+        if already_applied {
+            return Err(DomainError::InvalidInput(format!(
+                "{} was already applied to",
+                startup.name
+            )));
+        }
+        if self.repository.count_applied_today().await? >= self.profile.daily_limit {
+            return Err(DomainError::InvalidInput(
+                "daily send limit reached, try again tomorrow".into(),
+            ));
+        }
+
+        let outgoing = self.outgoing(EmailPreview {
+            to: recipient.clone(),
+            ..email
+        });
+        match self.mailer.send(&outgoing).await {
+            Ok(_) => {
+                self.repository
+                    .record(NewApplication::for_startup(
+                        startup,
+                        Some(recipient),
+                        ApplicationStatus::Applied,
+                    ))
+                    .await?;
+                Ok(HuntOutcome::Applied)
+            }
+            Err(error) => Ok(HuntOutcome::SendFailed(error.to_string())),
+        }
+    }
+
+    pub async fn skip(&self, startup: &Startup) -> Result<(), DomainError> {
+        self.repository
+            .record(NewApplication::for_startup(
+                startup,
+                None,
+                ApplicationStatus::Skipped,
+            ))
+            .await
+    }
+}
+
+fn is_email_address(value: &str) -> bool {
+    match value.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !value.chars().any(char::is_whitespace)
+        }
+        None => false,
     }
 }
 

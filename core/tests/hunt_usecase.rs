@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use stagezero_core::DomainError;
 use stagezero_core::entities::{
-    Applicant, Application, ApplicationStatus, Attachment, Contact, ContactOrigin, EmailTemplate,
-    Founder, HuntCriteria, HuntEvent, HuntOutcome, NewApplication, OutgoingEmail, Startup,
-    TeamSizeRange,
+    Applicant, Application, ApplicationStatus, Attachment, BatchInfo, Contact, ContactOrigin,
+    EmailPreview, EmailTemplate, Founder, HuntCriteria, HuntEvent, HuntOutcome, NewApplication,
+    OutgoingEmail, Startup, TeamSizeRange, TemplateContext,
 };
 use stagezero_core::traits::{
     ApplicationRepository, ContactFinder, Delay, FounderSource, HuntProgress, Mailer,
@@ -17,6 +17,14 @@ use stagezero_core::usecases::{HuntUseCase, OutreachProfile, ResetUseCase, Statu
 struct FixedDirectory(Vec<Startup>);
 
 impl StartupDirectory for FixedDirectory {
+    async fn batches(&self) -> Result<Vec<BatchInfo>, DomainError> {
+        Ok(vec![BatchInfo {
+            slug: "winter-2024".into(),
+            name: "Winter 2024".into(),
+            count: self.0.len(),
+        }])
+    }
+
     async fn fetch(&self, _criteria: &HuntCriteria) -> Result<Vec<Startup>, DomainError> {
         Ok(self.0.clone())
     }
@@ -77,6 +85,16 @@ impl MemoryRepository {
 }
 
 impl ApplicationRepository for MemoryRepository {
+    async fn find(&self, yc_slug: &str) -> Result<Option<Application>, DomainError> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.yc_slug == yc_slug)
+            .cloned())
+    }
+
     async fn exists(&self, yc_slug: &str) -> Result<bool, DomainError> {
         Ok(self
             .rows
@@ -172,6 +190,8 @@ fn startup(slug: &str, website: Option<&str>) -> Startup {
         team_size: Some(3),
         industries: vec!["Fintech".into()],
         one_liner: "Payments for robots".into(),
+        tags: vec!["Payments".into()],
+        description: String::new(),
     }
 }
 
@@ -181,6 +201,8 @@ fn profile(with_resume: bool, daily_limit: usize) -> OutreachProfile {
             name: "Ada".into(),
             email: "ada@example.dev".into(),
             portfolio: Some("https://ada.dev".into()),
+            highlights: Vec::new(),
+            max_highlights: 3,
         },
         template: EmailTemplate {
             subject: "{{company_name}} x {{applicant_name}}".into(),
@@ -421,5 +443,169 @@ fn team_size_and_status_parsing() {
     assert_eq!(
         "failed_no_contact".parse::<ApplicationStatus>().unwrap(),
         ApplicationStatus::FailedNoContact
+    );
+}
+
+#[tokio::test]
+async fn explore_annotates_known_statuses() {
+    let (directory, founders, contacts) = scenario();
+    let use_case = HuntUseCase::new(
+        directory,
+        founders,
+        contacts,
+        MemoryRepository::seeded("beta"),
+        RecordingMailer::default(),
+        CountingDelay::default(),
+        profile(true, 10),
+    );
+
+    let entries = use_case.explore(&criteria(true, None)).await.unwrap();
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[1].status, Some(ApplicationStatus::Applied));
+    assert_eq!(entries[0].status, None);
+    assert_eq!(use_case.batches().await.unwrap()[0].count, 4);
+}
+
+#[tokio::test]
+async fn inspect_drafts_email_even_without_contact() {
+    let (directory, founders, contacts) = scenario();
+    let use_case = HuntUseCase::new(
+        directory,
+        founders,
+        contacts,
+        MemoryRepository::default(),
+        RecordingMailer::default(),
+        CountingDelay::default(),
+        profile(true, 10),
+    );
+
+    let found = use_case
+        .inspect(&startup("alpha", Some("https://alpha.com")))
+        .await
+        .unwrap();
+    assert_eq!(found.email.to, "grace@alpha.com");
+    assert_eq!(found.founders.len(), 1);
+    assert!(found.email.body.starts_with("Hi Grace"));
+
+    let missing = use_case
+        .inspect(&startup("beta", Some("https://beta.com")))
+        .await
+        .unwrap();
+    assert!(missing.contact.is_none());
+    assert_eq!(missing.email.to, "");
+    assert_eq!(missing.email.subject, "beta Inc x Ada");
+}
+
+#[tokio::test]
+async fn reviewed_email_is_sent_once_and_recorded() {
+    let (directory, founders, contacts) = scenario();
+    let repository = MemoryRepository::default();
+    let mailer = RecordingMailer::default();
+    let use_case = HuntUseCase::new(
+        directory,
+        founders,
+        contacts,
+        repository.clone(),
+        mailer.clone(),
+        CountingDelay::default(),
+        profile(true, 10),
+    );
+    let target = startup("beta", Some("https://beta.com"));
+    let edited = EmailPreview {
+        to: " ceo@beta.com ".into(),
+        subject: "Custom subject".into(),
+        body: "Custom body".into(),
+    };
+
+    let outcome = use_case
+        .send_reviewed(&target, edited.clone())
+        .await
+        .unwrap();
+    assert_eq!(outcome, HuntOutcome::Applied);
+    {
+        let sent = mailer.sent.lock().unwrap();
+        assert_eq!(sent[0].to, "ceo@beta.com");
+        assert_eq!(sent[0].subject, "Custom subject");
+        assert_eq!(sent[0].reply_to.as_deref(), Some("ada@example.dev"));
+        assert_eq!(sent[0].attachments.len(), 1);
+    }
+    assert_eq!(
+        repository.statuses(),
+        vec![("beta".to_string(), ApplicationStatus::Applied)]
+    );
+
+    let duplicate = use_case.send_reviewed(&target, edited).await;
+    assert!(matches!(duplicate, Err(DomainError::InvalidInput(_))));
+
+    let invalid = use_case
+        .send_reviewed(
+            &startup("delta", None),
+            EmailPreview {
+                to: "not-an-email".into(),
+                subject: "s".into(),
+                body: "b".into(),
+            },
+        )
+        .await;
+    assert!(matches!(invalid, Err(DomainError::InvalidInput(_))));
+}
+
+#[tokio::test]
+async fn skip_records_skipped_status() {
+    let (directory, founders, contacts) = scenario();
+    let repository = MemoryRepository::default();
+    let use_case = HuntUseCase::new(
+        directory,
+        founders,
+        contacts,
+        repository.clone(),
+        RecordingMailer::default(),
+        CountingDelay::default(),
+        profile(true, 10),
+    );
+
+    use_case.skip(&startup("gamma", None)).await.unwrap();
+    assert_eq!(
+        repository.statuses(),
+        vec![("gamma".to_string(), ApplicationStatus::Skipped)]
+    );
+}
+
+#[test]
+fn one_liner_clause_and_applicant_first_name_render_cleanly() {
+    let template = EmailTemplate {
+        subject: "{{company_name}}".into(),
+        body: "Saw {{company_name}} in YC {{batch}}{{one_liner_clause}}. {{applicant_first_name}}"
+            .into(),
+    };
+    let applicant = Applicant {
+        name: "Ada Lovelace".into(),
+        email: "ada@example.dev".into(),
+        portfolio: None,
+        highlights: Vec::new(),
+        max_highlights: 3,
+    };
+    let mut with_pitch = startup("alpha", None);
+    with_pitch.one_liner = " Payments for robots. ".into();
+    let context = TemplateContext {
+        startup: &with_pitch,
+        founder: None,
+        applicant: &applicant,
+    };
+    assert_eq!(
+        template.render(&context).1,
+        "Saw alpha Inc in YC Winter 2024 (\"Payments for robots\"). Ada"
+    );
+
+    let mut without_pitch = startup("beta", None);
+    without_pitch.one_liner = String::new();
+    let context = TemplateContext {
+        startup: &without_pitch,
+        founder: None,
+        applicant: &applicant,
+    };
+    assert_eq!(
+        template.render(&context).1,
+        "Saw beta Inc in YC Winter 2024. Ada"
     );
 }

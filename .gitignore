@@ -2,3 +2,5 @@
 stagezero.toml
 *.db
 *.db-journal
+.wrangler/
+*.pdf

@@ -4,7 +4,7 @@ use scraper::{Html, Selector};
 use serde::Deserialize;
 use serde_json::Value;
 use stagezero_core::DomainError;
-use stagezero_core::entities::{Founder, HuntCriteria, Startup};
+use stagezero_core::entities::{BatchInfo, Founder, HuntCriteria, Startup};
 use stagezero_core::traits::{FounderSource, StartupDirectory};
 
 use crate::http::random_user_agent;
@@ -21,7 +21,7 @@ struct YcOssCompany {
     #[serde(default)]
     batch: String,
     #[serde(default)]
-    team_size: Option<u32>,
+    team_size: Option<i64>,
     #[serde(default)]
     industry: Option<String>,
     #[serde(default)]
@@ -34,9 +34,17 @@ struct YcOssCompany {
     status: Option<String>,
     #[serde(default)]
     one_liner: Option<String>,
+    #[serde(default)]
+    long_description: Option<String>,
 }
 
 impl YcOssCompany {
+    fn known_team_size(&self) -> Option<u32> {
+        self.team_size
+            .filter(|size| *size > 0)
+            .and_then(|size| u32::try_from(size).ok())
+    }
+
     fn is_active(&self) -> bool {
         self.status
             .as_deref()
@@ -60,6 +68,7 @@ impl YcOssCompany {
     }
 
     fn into_startup(self) -> Startup {
+        let team_size = self.known_team_size();
         let mut industries = self.industries;
         if industries.is_empty() {
             industries.extend(self.industry);
@@ -69,9 +78,11 @@ impl YcOssCompany {
             name: self.name,
             website: self.website.filter(|website| !website.trim().is_empty()),
             batch: self.batch,
-            team_size: self.team_size,
+            team_size,
             industries,
             one_liner: self.one_liner.unwrap_or_default(),
+            tags: self.tags,
+            description: self.long_description.unwrap_or_default().trim().to_string(),
         }
     }
 }
@@ -117,15 +128,27 @@ pub fn filter_companies(
     raw_json: &str,
     criteria: &HuntCriteria,
 ) -> Result<Vec<Startup>, DomainError> {
-    let companies: Vec<YcOssCompany> = serde_json::from_str(raw_json).map_err(|error| {
+    let entries: Vec<Value> = serde_json::from_str(raw_json).map_err(|error| {
         DomainError::Directory(format!("unexpected YC directory payload: {error}"))
     })?;
+    let companies = entries
+        .into_iter()
+        .filter_map(
+            |entry| match serde_json::from_value::<YcOssCompany>(entry) {
+                Ok(company) => Some(company),
+                Err(error) => {
+                    tracing::warn!("skipping malformed YC directory entry: {error}");
+                    None
+                }
+            },
+        )
+        .collect::<Vec<_>>();
     Ok(companies
         .into_iter()
         .filter(YcOssCompany::is_active)
         .filter(|company| {
             company
-                .team_size
+                .known_team_size()
                 .is_some_and(|size| criteria.team_size.contains(size))
         })
         .filter(|company| {
@@ -158,29 +181,90 @@ impl YcOssDirectory {
     }
 }
 
-impl StartupDirectory for YcOssDirectory {
-    async fn fetch(&self, criteria: &HuntCriteria) -> Result<Vec<Startup>, DomainError> {
-        let slug = batch_slug(&criteria.batch)?;
-        let url = format!("{}/batches/{slug}.json", self.base_url);
+#[derive(Debug, Deserialize)]
+struct YcOssMeta {
+    #[serde(default)]
+    batches: std::collections::BTreeMap<String, YcOssBatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YcOssBatch {
+    name: String,
+    #[serde(default)]
+    count: usize,
+}
+
+fn batch_recency(slug: &str) -> (u32, u32) {
+    let Some((season, year)) = slug.split_once('-') else {
+        return (0, 0);
+    };
+    let season_rank = match season {
+        "winter" => 1,
+        "spring" => 2,
+        "summer" => 3,
+        "fall" => 4,
+        _ => 0,
+    };
+    (year.parse().unwrap_or_default(), season_rank)
+}
+
+pub fn parse_batches(raw_json: &str) -> Result<Vec<BatchInfo>, DomainError> {
+    let meta: YcOssMeta = serde_json::from_str(raw_json)
+        .map_err(|error| DomainError::Directory(format!("unexpected YC meta payload: {error}")))?;
+    let mut batches = meta
+        .batches
+        .into_iter()
+        .filter(|(slug, _)| batch_recency(slug).0 > 0)
+        .map(|(slug, batch)| BatchInfo {
+            slug,
+            name: batch.name,
+            count: batch.count,
+        })
+        .collect::<Vec<_>>();
+    batches.sort_by_key(|batch| std::cmp::Reverse(batch_recency(&batch.slug)));
+    Ok(batches)
+}
+
+impl YcOssDirectory {
+    async fn get_text(&self, url: &str) -> Result<String, DomainError> {
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .header(USER_AGENT, random_user_agent())
             .send()
             .await
             .map_err(|error| DomainError::Directory(format!("cannot reach {url}: {error}")))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(DomainError::Directory(format!(
-                "batch `{}` not found",
-                criteria.batch
-            )));
+            return Err(DomainError::Directory(format!("{url} not found")));
         }
-        let body = response
+        response
             .error_for_status()
             .map_err(|error| DomainError::Directory(error.to_string()))?
             .text()
             .await
-            .map_err(|error| DomainError::Directory(error.to_string()))?;
+            .map_err(|error| DomainError::Directory(error.to_string()))
+    }
+}
+
+impl StartupDirectory for YcOssDirectory {
+    async fn batches(&self) -> Result<Vec<BatchInfo>, DomainError> {
+        let body = self
+            .get_text(&format!("{}/meta.json", self.base_url))
+            .await?;
+        parse_batches(&body)
+    }
+
+    async fn fetch(&self, criteria: &HuntCriteria) -> Result<Vec<Startup>, DomainError> {
+        let slug = batch_slug(&criteria.batch)?;
+        let body = self
+            .get_text(&format!("{}/batches/{slug}.json", self.base_url))
+            .await
+            .map_err(|error| match error {
+                DomainError::Directory(message) if message.ends_with("not found") => {
+                    DomainError::Directory(format!("batch `{}` not found", criteria.batch))
+                }
+                other => other,
+            })?;
         filter_companies(&body, criteria)
     }
 }

@@ -1,15 +1,18 @@
 use std::collections::BTreeSet;
 
 use stagezero_core::entities::{
-    ApplicationStatus, ContactOrigin, Founder, HuntCriteria, NewApplication, Startup, TeamSizeRange,
+    ApplicationStatus, Attachment, ContactOrigin, Founder, HuntCriteria, NewApplication,
+    OutgoingEmail, Startup, TeamSizeRange,
 };
 use stagezero_core::traits::ApplicationRepository;
+use stagezero_infra::cloudflare_mailer::{CloudflareEmailRequest, interpret_response};
+use stagezero_infra::config::EmailProvider;
 use stagezero_infra::config::{EXAMPLE_CONFIG, StageZeroConfig};
 use stagezero_infra::sqlite_repo::SqliteApplicationRepository;
 use stagezero_infra::website_contacts::{
     choose_contact, decode_cloudflare_email, extract_emails, guess_contact,
 };
-use stagezero_infra::yc_scraper::{batch_slug, extract_founders, filter_companies};
+use stagezero_infra::yc_scraper::{batch_slug, extract_founders, filter_companies, parse_batches};
 
 const COMPANIES_JSON: &str = include_str!("fixtures/batch.json");
 const COMPANY_PAGE_HTML: &str = include_str!("fixtures/company_page.html");
@@ -149,6 +152,8 @@ async fn sqlite_repository_round_trip() {
         team_size: Some(3),
         industries: vec!["Fintech".into()],
         one_liner: String::new(),
+        tags: Vec::new(),
+        description: String::new(),
     };
 
     assert!(!repository.exists("ledgerly").await.unwrap());
@@ -184,4 +189,89 @@ async fn sqlite_repository_round_trip() {
     );
     assert_eq!(repository.reset(None).await.unwrap(), 1);
     assert!(!repository.exists("ledgerly").await.unwrap());
+}
+
+#[test]
+fn example_config_defaults_to_cloudflare() {
+    let config = StageZeroConfig::parse(EXAMPLE_CONFIG).unwrap();
+    assert_eq!(config.email.provider, EmailProvider::Cloudflare);
+    assert_eq!(
+        config.email.formatted_sender(),
+        "Your Name <hello@yourdomain.com>"
+    );
+}
+
+#[test]
+fn cloudflare_request_matches_rest_schema() {
+    let email = OutgoingEmail {
+        to: "grace@ledgerly.ai".into(),
+        reply_to: Some("me@gmail.com".into()),
+        subject: "Hello".into(),
+        body: "Body".into(),
+        attachments: vec![Attachment {
+            filename: "Resume.PDF".into(),
+            content: std::sync::Arc::from(b"%PDF".as_slice()),
+        }],
+    };
+    let request = CloudflareEmailRequest::from_email("hello@msdqn.dev", Some("Maulana"), &email);
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["to"], "grace@ledgerly.ai");
+    assert_eq!(json["from"]["address"], "hello@msdqn.dev");
+    assert_eq!(json["from"]["name"], "Maulana");
+    assert_eq!(json["reply_to"], "me@gmail.com");
+    assert_eq!(json["text"], "Body");
+    assert_eq!(json["attachments"][0]["content"], "JVBERg==");
+    assert_eq!(json["attachments"][0]["type"], "application/pdf");
+    assert_eq!(json["attachments"][0]["disposition"], "attachment");
+}
+
+#[test]
+fn cloudflare_responses_are_interpreted() {
+    let delivered = r#"{"success":true,"errors":[],"messages":[],"result":{"delivered":["grace@ledgerly.ai"],"permanent_bounces":[],"queued":[]}}"#;
+    assert_eq!(
+        interpret_response("grace@ledgerly.ai", delivered).unwrap(),
+        "delivered"
+    );
+
+    let queued = r#"{"success":true,"errors":[],"messages":[],"result":{"delivered":[],"permanent_bounces":[],"queued":["Grace@Ledgerly.ai"]}}"#;
+    assert_eq!(
+        interpret_response("grace@ledgerly.ai", queued).unwrap(),
+        "queued"
+    );
+
+    let live = r#"{"success":true,"errors":[],"messages":[],"result":{"message_id":"<abc@msdqn.dev>","delivered":[],"queued":["maulanasdqn@gmail.com"],"permanent_bounces":[],"suppressed_recipients":[]}}"#;
+    assert_eq!(
+        interpret_response("maulanasdqn@gmail.com", live).unwrap(),
+        "queued <abc@msdqn.dev>"
+    );
+
+    let suppressed = r#"{"success":true,"errors":[],"messages":[],"result":{"delivered":[],"queued":[],"permanent_bounces":[],"suppressed_recipients":["grace@ledgerly.ai"]}}"#;
+    assert!(interpret_response("grace@ledgerly.ai", suppressed).is_err());
+
+    let bounced = r#"{"success":true,"errors":[],"messages":[],"result":{"delivered":[],"permanent_bounces":["grace@ledgerly.ai"],"queued":[]}}"#;
+    assert!(interpret_response("grace@ledgerly.ai", bounced).is_err());
+
+    let rejected = r#"{"success":false,"errors":[{"code":10203,"message":"email.sending.error.email.sending_disabled"}],"messages":[],"result":null}"#;
+    let error = interpret_response("grace@ledgerly.ai", rejected).unwrap_err();
+    assert!(error.to_string().contains("sending_disabled"));
+}
+
+#[test]
+fn batches_are_sorted_newest_first() {
+    let raw = r#"{"batches":{
+        "winter-2024":{"name":"Winter 2024","count":248},
+        "fall-2026":{"name":"Fall 2026","count":147},
+        "summer-2024":{"name":"Summer 2024","count":248},
+        "spring-2026":{"name":"Spring 2026","count":192},
+        "unspecified":{"name":"Unspecified","count":1}
+    }}"#;
+    let slugs = parse_batches(raw)
+        .unwrap()
+        .into_iter()
+        .map(|batch| batch.slug)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        slugs,
+        vec!["fall-2026", "spring-2026", "summer-2024", "winter-2024"]
+    );
 }

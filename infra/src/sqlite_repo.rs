@@ -82,6 +82,21 @@ fn application_from_row(row: &Row<'_>) -> rusqlite::Result<Application> {
 }
 
 impl ApplicationRepository for SqliteApplicationRepository {
+    async fn find(&self, yc_slug: &str) -> Result<Option<Application>, DomainError> {
+        let yc_slug = yc_slug.to_string();
+        self.run(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, yc_slug, company_name, website, contact_email, status, applied_at
+                     FROM applications WHERE yc_slug = ?1",
+                    params![yc_slug],
+                    application_from_row,
+                )
+                .optional()
+        })
+        .await
+    }
+
     async fn exists(&self, yc_slug: &str) -> Result<bool, DomainError> {
         let yc_slug = yc_slug.to_string();
         self.run(move |connection| {

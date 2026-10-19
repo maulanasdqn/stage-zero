@@ -85,5 +85,47 @@
   "batch": "Winter 2024",
   "status": "Active",
   "one_liner": ""
+ },
+ {
+  "id": 6,
+  "name": "Negative Size",
+  "slug": "negative",
+  "website": "https://negative.io",
+  "team_size": -1,
+  "industry": "B2B",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [
+   "SaaS"
+  ],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": "Bad data"
+ },
+ {
+  "id": 7,
+  "name": "Zero Size",
+  "slug": "zero",
+  "website": "https://zero.io",
+  "team_size": 0,
+  "industry": "B2B",
+  "industries": [
+   "B2B"
+  ],
+  "tags": [
+   "SaaS"
+  ],
+  "batch": "Winter 2024",
+  "status": "Active",
+  "one_liner": "Bad data"
+ },
+ {
+  "id": 8,
+  "slug": 42,
+  "name": [
+   "broken"
+  ],
+  "team_size": "many"
  }
 ]

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::DomainError;
+use crate::personalization::{Highlight, HighlightMatch, render_bullets, select_highlights};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Startup {
@@ -15,6 +16,10 @@ pub struct Startup {
     pub team_size: Option<u32>,
     pub industries: Vec<String>,
     pub one_liner: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub description: String,
 }
 
 impl Startup {
@@ -191,6 +196,22 @@ pub struct Applicant {
     pub name: String,
     pub email: String,
     pub portfolio: Option<String>,
+    #[serde(default)]
+    pub highlights: Vec<Highlight>,
+    #[serde(default = "default_max_highlights")]
+    pub max_highlights: usize,
+}
+
+pub const DEFAULT_MAX_HIGHLIGHTS: usize = 3;
+
+fn default_max_highlights() -> usize {
+    DEFAULT_MAX_HIGHLIGHTS
+}
+
+impl Applicant {
+    pub fn highlights_for(&self, startup: &Startup) -> Vec<HighlightMatch> {
+        select_highlights(&self.highlights, startup, self.max_highlights)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,8 +260,21 @@ pub struct TemplateContext<'a> {
 }
 
 impl TemplateContext<'_> {
-    fn variables(&self) -> [(&'static str, String); 9] {
-        [
+    fn one_liner_clause(&self) -> String {
+        let one_liner = self
+            .startup
+            .one_liner
+            .trim()
+            .trim_end_matches(['.', '!'])
+            .trim();
+        match one_liner.is_empty() {
+            true => String::new(),
+            false => format!(" (\"{one_liner}\")"),
+        }
+    }
+
+    fn variables(&self) -> Vec<(&'static str, String)> {
+        vec![
             (
                 "founder_first_name",
                 self.founder
@@ -264,8 +298,22 @@ impl TemplateContext<'_> {
                     .to_string(),
             ),
             ("one_liner", self.startup.one_liner.trim().to_string()),
+            ("one_liner_clause", self.one_liner_clause()),
+            (
+                "highlights",
+                render_bullets(&self.applicant.highlights_for(self.startup)),
+            ),
             ("batch", self.startup.batch.clone()),
             ("applicant_name", self.applicant.name.clone()),
+            (
+                "applicant_first_name",
+                self.applicant
+                    .name
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
             ("applicant_email", self.applicant.email.clone()),
             (
                 "portfolio",
@@ -342,4 +390,27 @@ pub struct StatusSummary {
     pub applied: usize,
     pub skipped: usize,
     pub failed_no_contact: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchInfo {
+    pub slug: String,
+    pub name: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectoryEntry {
+    pub startup: Startup,
+    pub status: Option<ApplicationStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartupInsight {
+    pub startup: Startup,
+    pub highlights: Vec<HighlightMatch>,
+    pub founders: Vec<Founder>,
+    pub contact: Option<Contact>,
+    pub email: EmailPreview,
+    pub status: Option<ApplicationStatus>,
 }

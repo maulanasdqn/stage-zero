@@ -106,10 +106,12 @@ fn init(config_path: &Path, args: InitArgs) -> anyhow::Result<()> {
     std::fs::write(config_path, EXAMPLE_CONFIG)
         .with_context(|| format!("cannot write {}", config_path.display()))?;
     println!(
-        "Created {}. Fill in your details, resume path and Resend sender.",
+        "Created {}. Fill in your details, resume path and email sender.",
         config_path.display()
     );
-    println!("Set RESEND_API_KEY in your environment or in the [resend] section.");
+    println!(
+        "Cloudflare: set CLOUDFLARE_API_TOKEN (Email Sending permission) and [email].cloudflare_account_id."
+    );
     Ok(())
 }
 
@@ -120,7 +122,9 @@ async fn hunt(config_path: &Path, args: HuntArgs) -> anyhow::Result<()> {
     if !args.dry_run {
         if !services.mailer_configured {
             bail!(
-                "Resend API key missing: set RESEND_API_KEY or [resend].api_key, or use --dry-run"
+                "{} is not configured: set {} and the [email] section, or use --dry-run",
+                services.mailer_provider,
+                config.email.token_variable()
             );
         }
         if !services.resume_loaded {
@@ -131,7 +135,8 @@ async fn hunt(config_path: &Path, args: HuntArgs) -> anyhow::Result<()> {
         }
         if !args.yes
             && !confirm(&format!(
-                "Send real emails to founders of {} startups (team size {}){}?",
+                "Send real emails from {} to founders of {} startups (team size {}){}?",
+                services.sender,
                 args.batch,
                 args.size,
                 args.industry
