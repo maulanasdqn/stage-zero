@@ -21,7 +21,8 @@ stage-zero/
 ├── stagezero-core/    entities, trait ports, use cases, personalization (no I/O)
 ├── stagezero-infra/   SQLite, yc-oss directory, YC founder scraper, website contact
 │                      finder, Cloudflare and Resend mailers, config, composition root
-├── stagezero-api/     Axum server and the web UI (askama template)
+├── stagezero-api/     Axum server: JSON API under /api, serves the built web UI
+├── stagezero-web/     React + TanStack Router/Query/Form + shadcn/ui frontend
 └── stagezero-cli/     `stagezero` binary (clap)
 ```
 
@@ -29,7 +30,7 @@ The core defines traits (`StartupDirectory`, `FounderSource`, `ContactFinder`, `
 
 ## Quick start
 
-Requires Rust 1.88 or newer.
+Requires Rust 1.88 or newer, plus Node.js and pnpm for the web UI.
 
 ```bash
 cargo run -p stagezero-cli -- init        # writes stagezero.toml from stagezero.example.toml
@@ -47,9 +48,11 @@ Then preview without sending anything:
 cargo run -p stagezero-cli -- hunt --batch W24 --size 1-10 --industry "B2B SaaS" --limit 5 --dry-run
 ```
 
-Or start the web UI at http://127.0.0.1:3000:
+Or build the web UI and start the server at http://127.0.0.1:3000:
 
 ```bash
+pnpm --dir stagezero-web install
+pnpm --dir stagezero-web build
 cargo run -p stagezero-api
 ```
 
@@ -75,6 +78,7 @@ Environment variables override the file:
 | `RESEND_API_KEY` | Resend API key when `provider = "resend"` |
 | `STAGEZERO_CONFIG` | Config path for the API server (default `stagezero.toml`) |
 | `STAGEZERO_ADDR` | Listen address for the API server (default `127.0.0.1:3000`) |
+| `STAGEZERO_WEB_DIR` | Built web UI to serve (default `stagezero-web/dist`) |
 | `RUST_LOG` | Log filter, e.g. `info` or `stagezero_infra=debug` |
 
 For Cloudflare, the sending domain must be onboarded first (`wrangler email sending enable yourdomain.com`). If the `from` address should also receive replies, enable Email Routing for the domain.
@@ -107,23 +111,43 @@ stagezero reset [--slug <yc-slug>] [--yes]
 
 All commands accept `--config <path>`.
 
+## Web UI
+
+`stagezero-web` is a Vite app built with React 19, TanStack Router (file-based routes), TanStack Query, TanStack Table v9, TanStack Form with Zod, Tailwind CSS v4 and shadcn/ui. The UI is composed from shadcn components (Sidebar, Card, Item, Field, InputGroup, Empty, ButtonGroup, Sheet, AlertDialog and more) rather than hand-styled HTML. It has three pages:
+
+- **Explore:** pick a batch and filters, then search, sort and page through the results (server-side, with every option kept in the URL), and open a startup in a side sheet to see its founders, contact, picked highlights and an editable draft. Send (with confirmation) or skip from there.
+- **Auto hunt:** start a dry run or a live hunt and follow its progress, report and per-startup activity.
+- **Applications:** summary cards and a paginated, sortable tracker table with search, a status filter, per-row actions and reset.
+
+For development, run the API and the Vite dev server side by side. Vite proxies `/api` to `127.0.0.1:3000`:
+
+```bash
+cargo run -p stagezero-api
+pnpm --dir stagezero-web dev     # http://localhost:5173
+```
+
+Frontend checks: `pnpm --dir stagezero-web lint` and `pnpm --dir stagezero-web build` (which also type-checks).
+
 ## HTTP API
+
+Every endpoint lives under `/api`. Any other path serves the web UI.
+
+List endpoints return `{ "data": [...], "pagination": { "page", "per_page", "total", "total_pages" } }`. `page` starts at 1 and `per_page` defaults to 20 (maximum 100). `/api/startups` also returns `batch_total` and `tracked`. YC directory responses are cached in memory for 10 minutes.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/` | Web UI |
-| GET | `/health` | Health check |
-| GET | `/settings` | Mailer, sender and resume status |
-| GET | `/batches` | YC batches, newest first |
-| GET | `/startups?batch=&size=&industry=` | Startups in a batch with their tracker status |
-| POST | `/startups/inspect` | Founders, contact, highlights and drafted email for `{ "startup": ... }` |
-| POST | `/startups/send` | Send a reviewed `{ "startup": ..., "email": { "to", "subject", "body" } }` |
-| POST | `/startups/skip` | Mark `{ "startup": ... }` as skipped |
-| GET | `/applications?status=` | Tracked applications |
-| GET | `/applications/summary` | Counts per status |
-| DELETE | `/applications?slug=` | Remove one record, or all records when `slug` is omitted |
-| POST | `/hunt` | Start a background hunt with `{ "batch", "size", "industry", "limit", "dry_run" }` |
-| GET | `/hunt` | Progress, events and report of the current or last hunt |
+| GET | `/api/health` | Health check |
+| GET | `/api/settings` | Mailer, sender and resume status |
+| GET | `/api/batches` | YC batches, newest first |
+| GET | `/api/startups?batch=&size=&industry=&q=&hide_contacted=&sort=&order=&page=&per_page=` | Paginated startups in a batch with their tracker status. `sort` is `name` or `team_size` |
+| POST | `/api/startups/inspect` | Founders, contact, highlights and drafted email for `{ "startup": ... }` |
+| POST | `/api/startups/send` | Send a reviewed `{ "startup": ..., "email": { "to", "subject", "body" } }` |
+| POST | `/api/startups/skip` | Mark `{ "startup": ... }` as skipped |
+| GET | `/api/applications?status=&q=&sort=&order=&page=&per_page=` | Paginated tracker. `sort` is `applied_at` (default, newest first), `company_name` or `status` |
+| GET | `/api/applications/summary` | Counts per status |
+| DELETE | `/api/applications?slug=` | Remove one record, or all records when `slug` is omitted |
+| POST | `/api/hunt` | Start a background hunt with `{ "batch", "size", "industry", "limit", "dry_run" }` |
+| GET | `/api/hunt` | Progress, events and report of the current or last hunt |
 
 ## Development
 
