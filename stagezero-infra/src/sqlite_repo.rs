@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter, types::Value};
 use stagezero_core::DomainError;
 use stagezero_core::entities::{Application, ApplicationStatus, NewApplication};
+use stagezero_core::pagination::{ApplicationQuery, Paginated};
 use stagezero_core::traits::ApplicationRepository;
 
 use crate::errors::InfraError;
@@ -154,6 +155,69 @@ impl ApplicationRepository for SqliteApplicationRepository {
                     application_from_row,
                 )?
                 .collect()
+        })
+        .await
+    }
+
+    async fn list_page(
+        &self,
+        query: &ApplicationQuery,
+    ) -> Result<Paginated<Application>, DomainError> {
+        let query = query.clone();
+        self.run(move |connection| {
+            let mut conditions = Vec::new();
+            let mut values: Vec<Value> = Vec::new();
+            if let Some(status) = query.status {
+                conditions.push("status = ?");
+                values.push(Value::Text(status.as_str().to_string()));
+            }
+            if let Some(search) = query
+                .search
+                .as_deref()
+                .map(str::trim)
+                .filter(|search| !search.is_empty())
+            {
+                conditions.push(
+                    "(company_name LIKE ? ESCAPE '\\' OR yc_slug LIKE ? ESCAPE '\\' OR contact_email LIKE ? ESCAPE '\\')",
+                );
+                let escaped = search
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                let pattern = format!("%{escaped}%");
+                values.extend(std::iter::repeat_n(Value::Text(pattern), 3));
+            }
+            let where_clause = match conditions.is_empty() {
+                true => String::new(),
+                false => format!("WHERE {}", conditions.join(" AND ")),
+            };
+
+            let total: i64 = connection.query_row(
+                &format!("SELECT COUNT(*) FROM applications {where_clause}"),
+                params_from_iter(values.iter()),
+                |row| row.get(0),
+            )?;
+
+            let page_sql = format!(
+                "SELECT id, yc_slug, company_name, website, contact_email, status, applied_at
+                 FROM applications {where_clause}
+                 ORDER BY {} {}, id DESC
+                 LIMIT ? OFFSET ?",
+                query.sort.column(),
+                query.direction.as_sql()
+            );
+            let mut page_values = values.clone();
+            page_values.push(Value::Integer(query.page.per_page as i64));
+            page_values.push(Value::Integer(query.page.offset() as i64));
+            let mut statement = connection.prepare(&page_sql)?;
+            let data = statement
+                .query_map(params_from_iter(page_values.iter()), application_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            Ok(Paginated {
+                data,
+                pagination: query.page.meta(total.max(0) as usize),
+            })
         })
         .await
     }

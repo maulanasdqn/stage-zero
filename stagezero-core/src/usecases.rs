@@ -6,6 +6,9 @@ use crate::entities::{
     NewApplication, OutgoingEmail, Startup, StartupInsight, StatusSummary, TemplateContext,
 };
 use crate::errors::DomainError;
+use crate::pagination::{
+    ApplicationQuery, ExploreQuery, ExploreResult, Paginated, compare_entries, matches_search,
+};
 use crate::traits::{
     ApplicationRepository, ContactFinder, Delay, FounderSource, HuntProgress, Mailer,
     StartupDirectory,
@@ -285,7 +288,8 @@ where
     pub async fn explore(
         &self,
         criteria: &HuntCriteria,
-    ) -> Result<Vec<DirectoryEntry>, DomainError> {
+        query: &ExploreQuery,
+    ) -> Result<ExploreResult, DomainError> {
         if criteria.batch.trim().is_empty() {
             return Err(DomainError::InvalidInput("batch must not be empty".into()));
         }
@@ -297,13 +301,46 @@ where
             .into_iter()
             .map(|application| (application.yc_slug, application.status))
             .collect::<HashMap<_, _>>();
-        Ok(startups
+        let entries = startups
             .into_iter()
             .map(|startup| DirectoryEntry {
                 status: statuses.get(&startup.slug).copied(),
                 startup,
             })
-            .collect())
+            .collect::<Vec<_>>();
+        let batch_total = entries.len();
+        let tracked = entries
+            .iter()
+            .filter(|entry| entry.status.is_some())
+            .count();
+
+        let needle = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|needle| !needle.is_empty())
+            .map(str::to_lowercase);
+        let mut visible = entries
+            .into_iter()
+            .filter(|entry| !query.hide_contacted || entry.status.is_none())
+            .filter(|entry| {
+                needle
+                    .as_deref()
+                    .is_none_or(|needle| matches_search(entry, needle))
+            })
+            .collect::<Vec<_>>();
+        if let Some(sort) = query.sort {
+            visible
+                .sort_by(|left, right| query.direction.apply(compare_entries(left, right, sort)));
+        }
+
+        let Paginated { data, pagination } = query.page.slice(visible);
+        Ok(ExploreResult {
+            data,
+            pagination,
+            batch_total,
+            tracked,
+        })
     }
 
     pub async fn inspect(&self, startup: &Startup) -> Result<StartupInsight, DomainError> {
@@ -444,6 +481,13 @@ impl<R: ApplicationRepository> StatusUseCase<R> {
         status: Option<ApplicationStatus>,
     ) -> Result<Vec<Application>, DomainError> {
         self.repository.list(status).await
+    }
+
+    pub async fn page(
+        &self,
+        query: &ApplicationQuery,
+    ) -> Result<Paginated<Application>, DomainError> {
+        self.repository.list_page(query).await
     }
 
     pub async fn summary(&self) -> Result<StatusSummary, DomainError> {

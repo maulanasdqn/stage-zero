@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
-use askama::Template;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use stagezero_core::DomainError;
 use stagezero_core::entities::{
-    Application, ApplicationStatus, BatchInfo, DirectoryEntry, EmailPreview, HuntCriteria,
-    HuntOutcome, Startup, StartupInsight, StatusSummary, TeamSizeRange,
+    Application, ApplicationStatus, BatchInfo, EmailPreview, HuntCriteria, HuntOutcome, Startup,
+    StartupInsight, StatusSummary,
 };
+use stagezero_core::pagination::{ExploreResult, Paginated};
 
+use crate::queries::{ApplicationParams, ExploreParams, parse_team_size};
 use crate::state::{AppState, HuntRun, SharedRunProgress, lock_run};
 
 pub struct ApiError {
@@ -48,45 +49,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn parse_team_size(size: Option<&str>) -> Result<TeamSizeRange, ApiError> {
-    match size.map(str::trim).filter(|size| !size.is_empty()) {
-        Some(size) => Ok(size.parse::<TeamSizeRange>()?),
-        None => Ok(TeamSizeRange::default()),
-    }
-}
-
 fn non_blank(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug, Deserialize)]
-pub struct StatusFilter {
-    pub status: Option<String>,
-}
-
-impl StatusFilter {
-    fn parse(&self) -> Result<Option<ApplicationStatus>, ApiError> {
-        self.status
-            .as_deref()
-            .filter(|status| !status.trim().is_empty())
-            .map(str::parse)
-            .transpose()
-            .map_err(ApiError::from)
-    }
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ResetQuery {
     pub slug: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExploreQuery {
-    pub batch: String,
-    #[serde(default)]
-    pub size: Option<String>,
-    #[serde(default)]
-    pub industry: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,15 +107,6 @@ impl HuntRequest {
     }
 }
 
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexTemplate {
-    mailer_provider: &'static str,
-    mailer_configured: bool,
-    sender: String,
-    resume_loaded: bool,
-}
-
 fn settings_of(state: &AppState) -> Settings {
     Settings {
         mailer_provider: state.mailer_provider,
@@ -176,18 +136,6 @@ fn ensure_can_send(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub async fn index(State(state): State<AppState>) -> Result<Html<String>, ApiError> {
-    IndexTemplate {
-        mailer_provider: state.mailer_provider,
-        mailer_configured: state.mailer_configured,
-        sender: state.sender.clone(),
-        resume_loaded: state.resume_loaded,
-    }
-    .render()
-    .map(Html)
-    .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
-}
-
 pub async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok" }))
 }
@@ -202,16 +150,10 @@ pub async fn list_batches(State(state): State<AppState>) -> Result<Json<Vec<Batc
 
 pub async fn explore_startups(
     State(state): State<AppState>,
-    Query(query): Query<ExploreQuery>,
-) -> Result<Json<Vec<DirectoryEntry>>, ApiError> {
-    let criteria = HuntCriteria {
-        team_size: parse_team_size(query.size.as_deref())?,
-        batch: query.batch,
-        industry: non_blank(query.industry),
-        limit: None,
-        dry_run: true,
-    };
-    Ok(Json(state.hunt.explore(&criteria).await?))
+    Query(params): Query<ExploreParams>,
+) -> Result<Json<ExploreResult>, ApiError> {
+    let (criteria, query) = params.into_parts()?;
+    Ok(Json(state.hunt.explore(&criteria, &query).await?))
 }
 
 pub async fn inspect_startup(
@@ -243,9 +185,9 @@ pub async fn skip_startup(
 
 pub async fn list_applications(
     State(state): State<AppState>,
-    Query(filter): Query<StatusFilter>,
-) -> Result<Json<Vec<Application>>, ApiError> {
-    Ok(Json(state.status.list(filter.parse()?).await?))
+    Query(params): Query<ApplicationParams>,
+) -> Result<Json<Paginated<Application>>, ApiError> {
+    Ok(Json(state.status.page(&params.into_query()?).await?))
 }
 
 pub async fn applications_summary(

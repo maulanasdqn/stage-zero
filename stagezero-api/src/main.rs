@@ -1,4 +1,5 @@
 mod handlers;
+mod queries;
 mod routers;
 mod state;
 
@@ -15,6 +16,8 @@ use crate::state::AppState;
 const CONFIG_PATH_ENV: &str = "STAGEZERO_CONFIG";
 const LISTEN_ADDRESS_ENV: &str = "STAGEZERO_ADDR";
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:3000";
+const WEB_DIR_ENV: &str = "STAGEZERO_WEB_DIR";
+const DEFAULT_WEB_DIR: &str = "stagezero-web/dist";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,7 +32,16 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
     let config = StageZeroConfig::load(&config_path)?;
     let services = build_live_services(&config)?;
-    let router = build_router(AppState::new(services));
+    let web_dir = std::env::var(WEB_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_WEB_DIR));
+    if !web_dir.join("index.html").exists() {
+        tracing::warn!(
+            "web UI not found at {}; build it with `pnpm --dir stagezero-web build`",
+            web_dir.display()
+        );
+    }
+    let router = build_router(AppState::new(services), &web_dir);
 
     let address =
         std::env::var(LISTEN_ADDRESS_ENV).unwrap_or_else(|_| DEFAULT_LISTEN_ADDRESS.to_string());

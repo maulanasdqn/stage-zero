@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use reqwest::Client;
 use reqwest::header::USER_AGENT;
 use scraper::{Html, Selector};
@@ -7,7 +11,11 @@ use stagezero_core::DomainError;
 use stagezero_core::entities::{BatchInfo, Founder, HuntCriteria, Startup};
 use stagezero_core::traits::{FounderSource, StartupDirectory};
 
+use tokio::sync::RwLock;
+
 use crate::http::random_user_agent;
+
+const DIRECTORY_CACHE_TTL: Duration = Duration::from_secs(600);
 
 pub const YC_OSS_BASE_URL: &str = "https://yc-oss.github.io/api";
 pub const YC_COMPANIES_BASE_URL: &str = "https://www.ycombinator.com/companies";
@@ -166,6 +174,7 @@ pub fn filter_companies(
 pub struct YcOssDirectory {
     client: Client,
     base_url: String,
+    cache: Arc<RwLock<HashMap<String, (Instant, Arc<str>)>>>,
 }
 
 impl YcOssDirectory {
@@ -177,6 +186,7 @@ impl YcOssDirectory {
         Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -226,6 +236,20 @@ pub fn parse_batches(raw_json: &str) -> Result<Vec<BatchInfo>, DomainError> {
 }
 
 impl YcOssDirectory {
+    async fn get_cached(&self, url: &str) -> Result<Arc<str>, DomainError> {
+        if let Some((fetched_at, body)) = self.cache.read().await.get(url)
+            && fetched_at.elapsed() < DIRECTORY_CACHE_TTL
+        {
+            return Ok(Arc::clone(body));
+        }
+        let body: Arc<str> = Arc::from(self.get_text(url).await?);
+        self.cache
+            .write()
+            .await
+            .insert(url.to_string(), (Instant::now(), Arc::clone(&body)));
+        Ok(body)
+    }
+
     async fn get_text(&self, url: &str) -> Result<String, DomainError> {
         let response = self
             .client
@@ -249,7 +273,7 @@ impl YcOssDirectory {
 impl StartupDirectory for YcOssDirectory {
     async fn batches(&self) -> Result<Vec<BatchInfo>, DomainError> {
         let body = self
-            .get_text(&format!("{}/meta.json", self.base_url))
+            .get_cached(&format!("{}/meta.json", self.base_url))
             .await?;
         parse_batches(&body)
     }
@@ -257,7 +281,7 @@ impl StartupDirectory for YcOssDirectory {
     async fn fetch(&self, criteria: &HuntCriteria) -> Result<Vec<Startup>, DomainError> {
         let slug = batch_slug(&criteria.batch)?;
         let body = self
-            .get_text(&format!("{}/batches/{slug}.json", self.base_url))
+            .get_cached(&format!("{}/batches/{slug}.json", self.base_url))
             .await
             .map_err(|error| match error {
                 DomainError::Directory(message) if message.ends_with("not found") => {

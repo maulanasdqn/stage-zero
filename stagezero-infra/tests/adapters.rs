@@ -275,3 +275,73 @@ fn batches_are_sorted_newest_first() {
         vec!["fall-2026", "spring-2026", "summer-2024", "winter-2024"]
     );
 }
+
+#[tokio::test]
+async fn sqlite_list_page_filters_sorts_and_paginates() {
+    use stagezero_core::pagination::{
+        ApplicationQuery, ApplicationSort, PageRequest, SortDirection,
+    };
+
+    let repository = SqliteApplicationRepository::in_memory().unwrap();
+    for (slug, name, status) in [
+        ("alpha", "Alpha", ApplicationStatus::Applied),
+        ("beta", "beta_100%", ApplicationStatus::Skipped),
+        ("gamma", "Gamma", ApplicationStatus::Applied),
+        ("delta", "Delta", ApplicationStatus::FailedNoContact),
+        ("epsilon", "Epsilon", ApplicationStatus::Applied),
+    ] {
+        repository
+            .record(NewApplication {
+                yc_slug: slug.into(),
+                company_name: name.into(),
+                website: None,
+                contact_email: Some(format!("hi@{slug}.com")),
+                status,
+            })
+            .await
+            .unwrap();
+    }
+
+    let applied = repository
+        .list_page(&ApplicationQuery {
+            status: Some(ApplicationStatus::Applied),
+            sort: ApplicationSort::CompanyName,
+            direction: SortDirection::Asc,
+            page: PageRequest::new(Some(2), Some(2)),
+            ..ApplicationQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(applied.pagination.total, 3);
+    assert_eq!(applied.pagination.total_pages, 2);
+    assert_eq!(applied.data.len(), 1);
+    assert_eq!(applied.data[0].company_name, "Gamma");
+
+    let literal = repository
+        .list_page(&ApplicationQuery {
+            search: Some("_100%".into()),
+            ..ApplicationQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(literal.pagination.total, 1);
+    assert_eq!(literal.data[0].yc_slug, "beta");
+
+    let by_email = repository
+        .list_page(&ApplicationQuery {
+            search: Some("EPSILON.com".into()),
+            ..ApplicationQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_email.data[0].yc_slug, "epsilon");
+
+    let wildcard = repository
+        .list_page(&ApplicationQuery {
+            search: Some("%".into()),
+            ..ApplicationQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(wildcard.pagination.total, 1);
+}

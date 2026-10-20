@@ -8,6 +8,9 @@ use stagezero_core::entities::{
     EmailPreview, EmailTemplate, Founder, HuntCriteria, HuntEvent, HuntOutcome, NewApplication,
     OutgoingEmail, Startup, TeamSizeRange, TemplateContext,
 };
+use stagezero_core::pagination::{
+    ApplicationQuery, ExploreQuery, PageRequest, Paginated, SortDirection, StartupSort,
+};
 use stagezero_core::traits::{
     ApplicationRepository, ContactFinder, Delay, FounderSource, HuntProgress, Mailer,
     StartupDirectory,
@@ -131,6 +134,14 @@ impl ApplicationRepository for MemoryRepository {
             .filter(|row| status.is_none_or(|status| row.status == status))
             .cloned()
             .collect())
+    }
+
+    async fn list_page(
+        &self,
+        query: &ApplicationQuery,
+    ) -> Result<Paginated<Application>, DomainError> {
+        let rows = self.list(query.status).await?;
+        Ok(query.page.slice(rows))
     }
 
     async fn count_applied_today(&self) -> Result<usize, DomainError> {
@@ -459,8 +470,14 @@ async fn explore_annotates_known_statuses() {
         profile(true, 10),
     );
 
-    let entries = use_case.explore(&criteria(true, None)).await.unwrap();
+    let result = use_case
+        .explore(&criteria(true, None), &ExploreQuery::default())
+        .await
+        .unwrap();
+    let entries = result.data;
     assert_eq!(entries.len(), 4);
+    assert_eq!(result.batch_total, 4);
+    assert_eq!(result.tracked, 1);
     assert_eq!(entries[1].status, Some(ApplicationStatus::Applied));
     assert_eq!(entries[0].status, None);
     assert_eq!(use_case.batches().await.unwrap()[0].count, 4);
@@ -608,4 +625,82 @@ fn one_liner_clause_and_applicant_first_name_render_cleanly() {
         template.render(&context).1,
         "Saw beta Inc in YC Winter 2024. Ada"
     );
+}
+
+#[tokio::test]
+async fn explore_searches_sorts_hides_and_paginates() {
+    let (directory, founders, contacts) = scenario();
+    let use_case = HuntUseCase::new(
+        directory,
+        founders,
+        contacts,
+        MemoryRepository::seeded("beta"),
+        RecordingMailer::default(),
+        CountingDelay::default(),
+        profile(true, 10),
+    );
+
+    let sorted = use_case
+        .explore(
+            &criteria(true, None),
+            &ExploreQuery {
+                hide_contacted: true,
+                sort: Some(StartupSort::Name),
+                direction: SortDirection::Desc,
+                page: PageRequest::new(Some(1), Some(2)),
+                ..ExploreQuery::default()
+            },
+        )
+        .await
+        .unwrap();
+    let slugs = sorted
+        .data
+        .iter()
+        .map(|entry| entry.startup.slug.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(slugs, vec!["gamma", "delta"]);
+    assert_eq!(sorted.pagination.total, 3);
+    assert_eq!(sorted.pagination.total_pages, 2);
+    assert_eq!(sorted.batch_total, 4);
+
+    let second = use_case
+        .explore(
+            &criteria(true, None),
+            &ExploreQuery {
+                hide_contacted: true,
+                sort: Some(StartupSort::Name),
+                direction: SortDirection::Desc,
+                page: PageRequest::new(Some(2), Some(2)),
+                ..ExploreQuery::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.data[0].startup.slug, "alpha");
+
+    let searched = use_case
+        .explore(
+            &criteria(true, None),
+            &ExploreQuery {
+                search: Some("  DELTA ".into()),
+                ..ExploreQuery::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(searched.pagination.total, 1);
+}
+
+#[test]
+fn page_request_clamps_and_computes_meta() {
+    let request = PageRequest::new(Some(0), Some(1000));
+    assert_eq!(request.page, 1);
+    assert_eq!(request.per_page, 100);
+    let meta = PageRequest::new(Some(3), Some(10)).meta(25);
+    assert_eq!(meta.total_pages, 3);
+    assert_eq!(PageRequest::new(Some(3), Some(10)).offset(), 20);
+    assert_eq!(PageRequest::default().meta(0).total_pages, 1);
+    let page = PageRequest::new(Some(2), Some(2)).slice(vec![1, 2, 3, 4, 5]);
+    assert_eq!(page.data, vec![3, 4]);
+    assert_eq!(page.pagination.total, 5);
 }

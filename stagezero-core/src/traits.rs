@@ -5,6 +5,7 @@ use crate::entities::{
     NewApplication, OutgoingEmail, Startup,
 };
 use crate::errors::DomainError;
+use crate::pagination::{ApplicationQuery, Paginated};
 
 pub trait StartupDirectory: Send + Sync {
     fn batches(&self) -> impl Future<Output = Result<Vec<BatchInfo>, DomainError>> + Send;
@@ -47,6 +48,11 @@ pub trait ApplicationRepository: Send + Sync {
         &self,
         status: Option<ApplicationStatus>,
     ) -> impl Future<Output = Result<Vec<Application>, DomainError>> + Send;
+
+    fn list_page(
+        &self,
+        query: &ApplicationQuery,
+    ) -> impl Future<Output = Result<Paginated<Application>, DomainError>> + Send;
 
     fn count_applied_today(&self) -> impl Future<Output = Result<usize, DomainError>> + Send;
 
